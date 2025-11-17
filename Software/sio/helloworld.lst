@@ -1,0 +1,96 @@
+                        ; --------------------------------------
+                        ; zasm: assemble "helloworld.asm"
+                        ; date: 2025-10-21 20:20:21
+                        ; --------------------------------------
+
+
+                        ;+-- Symbols ---
+                        ; Only Port A is hooked up
+0001:                   DATA = %00000001
+0003:                   CMD	= %00000011
+                        ;---
+                        
+                        ;+-- Reset --- 
+8000:                           .org $8000
+                        
+8000:                   reset:
+8000: 310050   [10]     				ld sp, $5000
+                        
+                        
+8003: 3E03     [17]     				ld a, %00000011       ; Select WR3
+8005: D303     [28]             out (CMD), a
+8007: 3EC1     [35]             ld a, %11000001
+                        				;      ││     └─────── Rx Enable
+                        				;      └┴───────────── 8 bits per character
+8009: D303     [46]             out (CMD), a
+                        
+800B: 3E04     [53]             ld a, %00000100       ; Select WR4
+800D: D303     [64]             out (CMD), a
+800F: 3E47     [71]             ld a, %01000111
+                        				;      │││││││└─────── Parity Enable
+                        				;      ││││││└──────── Parity Even
+                        				;      ││││└┴───────── 1 Stop Bit
+                        				;      ││└┴──────────0 Sync Mode Disable
+                        				;      └┴───────────── X32 Clock Mode 
+8011: D303     [82]             out (CMD), a
+                        
+8013: 3E05     [89]     				ld a, %00000101       ; Select WR5
+8015: D303     [100]            out (CMD), a
+8017: 3E68     [107]            ld a, %01101000
+                        				;       ││ └────────── Tx Enable
+                        				;       └┴──────────── 8 bits per character 
+8019: D303     [118]            out (CMD), a 
+                        ;---
+                        
+                        ;+-- Loop ---
+801B: 210D90   [128]    				ld hl, message + 12
+801E:                   loop:
+801E: 56       [ 7]     				ld d, (hl)
+801F: 7A       [11]     				ld a, d
+8020: CD2A80   [28]     				call print
+8023: 2D       [32]     				dec l
+8024: C21E80   [42|42]  				jp nz, loop
+8027:                   halt:
+8027: C32780   [10]     				jp halt
+                        ;---
+                        
+                        ;+--- Subroutines
+802A:                   print:
+802A: D301     [11]     				out (DATA), a
+802C: 061C     [18]     				ld b, 28     		   		; 7 T
+802E:                   delay:												; Total 7 + 13 * 28 = 379 T
+802E: 10FE     [ 8|13]      		djnz delay		    		; 28 × 13 + 8 = 372 T
+8030: C9       [18]     				ret	
+                        
+                        				.org $9001
+                        ;---
+                        
+                        ;+-- Look-up Tables
+9001:                   message:
+9001: 2120646C          				db '!', ' ', 'd', 'l', 'r', 'o', 'w', ' ', 'o', 'l', 'l', 'e', 'H'
+9005: 726F7720          
+9009: 6F6C6C65          
+900D: 48                
+                        ;---
+
+
+; +++ segments +++
+
+#CODE          = $8000 = 32768,  size = $100E =  4110
+
+; +++ global symbols +++
+
+CMD     = $0003 =     3          helloworld.asm:4
+DATA    = $0001 =     1          helloworld.asm:3
+_end    = $900E = 36878          helloworld.asm:8 (unused)
+_size   = $100E =  4110          helloworld.asm:8 (unused)
+delay   = $802E = 32814          helloworld.asm:55
+halt    = $8027 = 32807          helloworld.asm:47
+loop    = $801E = 32798          helloworld.asm:41
+message = $9001 = 36865          helloworld.asm:63
+print   = $802A = 32810          helloworld.asm:52
+reset   = $8000 = 32768          helloworld.asm:10 (unused)
+
+
+total time: 0.0016 sec.
+no errors

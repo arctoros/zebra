@@ -1,0 +1,291 @@
+;+-- Symbols --- 
+;Only Port A is hooked up
+;SIO_DATA = $00								; Port A data register
+SIO_DATA = $01								; Port B data register
+;SIO_CMD	= $02									; Port A command register
+SIO_CMD	= $03								; Port B command register
+
+PIO_IN_DATA = $10 						; Port A data register
+PIO_OUT_DATA = $11 						; Port B data register
+PIO_IN_CMD = $12 							; Port A command register
+PIO_OUT_CMD = $13				 			; Port B command register
+
+PSG_INACT = $20								; BDIR Low, BC1 Low
+PSG_READ  = $21								; BDIR Low, BC1 High
+PSG_WRITE = $22								; BDIR High, BC1 Low
+PSG_ADDR  = $23								; BDIR High, BC1 High
+
+CTC_C0 = $30									; Channel 0
+CTC_C1 = $31									; Channel 1
+CTC_C2 = $32									; Channel 2
+CTC_C3 = $33									; Channel 3
+
+; RAM
+STACK = $5000
+KEYBOARD_MAP = $4000
+
+
+C0_Intervall = $01
+;---
+
+;+-- Reset ---  
+reset:
+				;+-- CPU Initialisation
+				ld sp, STACK
+				ld a, hi(intVectors)
+				ld i, a
+				im 2
+				di
+				;---
+
+				;+-- SIO Initialisation
+				;ld a, %00000001       ; Select WR1
+        ;out (SIO_CMD), a
+        ;ld a, %00011000
+				;         └┴────────── INT on all RX characters (Parity doesn't affect vector)
+        ;out (SIO_CMD), a
+
+				;ld a, %00000010       ; Select WR2
+        ;out (SIO_CMD), a
+        ;ld a, lo(SIOVec)
+        ;out (SIO_CMD), a
+
+				ld a, %00000011       ; Select WR3
+        out (SIO_CMD), a
+        ld a, %11000001
+				;      ││     └─────── Rx Enable
+				;      └┴───────────── 8 bits per character
+        out (SIO_CMD), a
+
+        ld a, %00000100       ; Select WR4
+        out (SIO_CMD), a
+        ld a, %01000111
+				;      │││││││└─────── Parity Enable
+				;      ││││││└──────── Parity Even
+				;      ││││└┴───────── 1 Stop Bit
+				;      ││└┴─────────── Sync Mode Disable
+				;      └┴───────────── X16 Clock Mode 
+        out (SIO_CMD), a
+
+				ld a, %00000101       ; Select WR5
+        out (SIO_CMD), a
+        ld a, %01101000
+				;       ││ └────────── Tx Enable
+				;       └┴──────────── 8 bits per character 
+        out (SIO_CMD), a 
+
+				ld a, ">"
+				call printChar
+				;---
+
+				;+-- PIO Initialisation
+				ld a, %00001111
+				;      ││││└┴┴┴─────── Identifies Mode Control Word 
+				;      ││└┴─────────── Don't care 
+				;      └┴───────────── Mode 0 (Output)
+				out (PIO_OUT_CMD), a	; Write to output port command register
+
+				ld a, %01001111
+				;      ││││└┴┴┴─────── Identifies Mode Control Word 
+				;      ││└┴─────────── Don't care 
+				;      └┴───────────── Mode 1 (Input)
+				out (PIO_IN_CMD), a		; Write to input port command register
+
+				; Reset Keyboad Map
+				ld b, 8
+				ld hl, KEYBOARD_MAP
+resetKeyboardMap:
+				ld (hl), 0
+				inc hl
+				djnz resetKeyboardMap
+				;---
+
+				;+-- CTC Initialisation
+				ld a, lo(CTCVec)
+        out (CTC_C0), a
+        
+				ld a, %10000101
+				;      │││ │││└─────── Control Word
+				;      │││ ││└──────── Continued Operation
+				;      │││ │└───────── Time Constant Follows
+				;      │││ └────────── Automatic trigger
+				;      ││└──────────── Prescaler Value = 256 
+				;      │└───────────── Select Timer Mode
+				;      └────────────── Enable Interrupts 
+        out (CTC_C0), a
+
+				ld a, C0_Intervall		; Start Timer
+				out (CTC_C0), a
+        
+				;---
+
+				;+-- PSG  Initialisation
+				ld b, 16
+				ld hl, PSGCommands
+PSGReset:
+				ld d, l
+				ld e, (hl)
+				call PSGInit
+				inc l
+				djnz PSGReset
+				;--- 
+
+				;+-- Player Initialisation
+				;ld hl,MusicStart    	;Declared below.
+    		;xor a                 ;Subsong 0 (the main one).
+    		;call PLY_AKG_Init
+				;---
+				
+				jp program
+;---
+
+;+-- Subroutines
+.local
+printChar::
+				push bc
+				out (SIO_DATA), a			; Print A to SIO
+				ld b, 40
+delay:	djnz delay						; 7 + 13 * 28 + 8 = 379 T
+				pop bc
+				ret
+.endlocal
+
+.local
+strobe::
+				push af
+				push de
+				push hl
+				ld d, %00000001				; Load the initial output coordinate
+				ld hl, KEYBOARD_MAP		; Load the initial address of the keyboard map pointer
+bitBang:
+				ld a, d								; Load in the next bit
+				out (PIO_OUT_DATA), a ; Strobe the next bit
+				in a, (PIO_IN_DATA)		; Read back the input coordinate
+				ld (hl), a						; Load the ready byte into ram at keyboard map pointer
+				inc hl								; Increment keyboard map pointer
+				sla d									; Shit output coordinate left by 1
+				jp nc, bitBang 				; Break if carry is set (Bit has arrived)
+
+				pop hl
+				pop de
+				pop af
+				ret
+.endlocal
+
+.local
+printCharacters::
+				ld bc, 0							; B is data byte, C is bit index
+				ld de, 0							; D is shift bit, E is unused
+				ld hl, KEYBOARD_MAP		; hl is map pointer, l is byte index
+				ld a, (hl)						; Load 0th byte of map
+				and %01000000					; Mask the shift bit
+				ld d, a								; Store shift bit in D
+byteLoop:
+				ld b, (hl)						; Load in next byte of map
+
+bitLoop:
+				bit 0, b							; Test the 0th bit
+				jp z, next						; Jump if clear
+															; If bit is set:
+				push bc
+				push hl				
+				ld a, l								; Load in the byte index
+				sla a									; Byte Index << 3
+				sla a
+				sla a
+				add c									; Add bit index
+				or d									; Set the shift bit accordingly
+
+				ld hl, CoordsToASCII	; Load the ASCII LUT offset
+				ld bc, 0							; Clear BC
+				ld c, a								; Load character index into c (to prevent 8-bit overflow)
+				add hl, bc						; Add character index
+				ld a, (hl)						; Retrieve ASCII character with index
+				add 0									; Set the condition flags
+				call nz, printChar		; Only print if not null
+		
+				pop hl
+				pop bc
+
+next:
+				srl b									; Shift byte right
+				ld a, 8
+				inc c									; Increment bit index
+				cp c									; Compare bit index to 8
+				jp nz, bitLoop				; Repeat if C != 8
+
+				ld c, 0								; If C = 8, reset C
+				ld a, lo(KEYBOARD_MAP + 8)	; Load the last address of map
+				inc hl								; Increment byte index
+				cp l									; Compare byte index to last address
+				jp nz, byteLoop				; Repeat if not arrived at last address
+				ret										; Else, return
+.endlocal
+
+PSGInit::
+				ld a, d
+				out (PSG_ADDR), a
+				ld a, e
+				out (PSG_WRITE), a
+				ret
+;---
+
+;+-- Interrupt Handlers    
+				org $8F00
+intVectors:
+CTCVec:	DW CTCInt
+SIOVec:	DW SIOInt
+
+CTCInt:	call strobe
+				ld a, %10000101
+        out (CTC_C0), a
+				ld a, C0_Intervall			; Start Timer
+				out (CTC_C0), a
+				ei
+				reti
+
+SIOInt:	ei
+				reti
+;---
+
+;+-- Look-up Tables
+				org $9000
+CoordsToASCII:
+    		DB 60h, 38h, 00h, 69h, 1Bh, 6Bh, 00h, 2Ch
+   			DB 31h, 39h, 71h, 6Fh, 61h, 6Ch, 7Ah, 2Eh
+				DB 32h, 30h, 77h, 70h, 73h, 3Bh, 78h, 2Fh
+				DB 33h, 2Dh, 65h, 5Bh, 64h, 27h, 63h, 00h
+				DB 34h, 3Dh, 72h, 5Dh, 66h, 0Ah, 76h, 00h
+				DB 35h, 08h, 74h, 5Ch, 67h, 00h, 62h, 00h
+				DB 36h, 00h, 79h, 00h, 68h, 00h, 6Eh, 00h
+				DB 37h, 00h, 75h, 00h, 6Ah, 20h, 6Dh, 00h
+
+CoordsToASCIIShift:
+				DB 7Eh, 2Ah, 00h, 49h, 1Bh, 4Bh, 00h, 3Ch
+				DB 21h, 28h, 51h, 4Fh, 41h, 4Ch, 5Ah, 3Eh
+				DB 40h, 29h, 57h, 50h, 53h, 3Ah, 58h, 3Fh
+				DB 23h, 5Fh, 45h, 7Bh, 44h, 22h, 43h, 00h
+				DB 24h, 2Bh, 52h, 7Dh, 46h, 0Ah, 56h, 00h
+				DB 25h, 08h, 54h, 7Ch, 47h, 00h, 42h, 00h
+				DB 5Eh, 00h, 59h, 00h, 48h, 00h, 4Eh, 00h
+				DB 26h, 00h, 55h, 00h, 4Ah, 20h, 4Dh, 00h
+
+				org $9100					; LSB should be $00
+PSGCommands:
+				DB $00							; R0, Port A fine adjustment = $DE
+				DB $00							; R1, Port A coarse adjustment = $01
+				DB $00							; R2, Clear
+				DB $00							; R3, Clear
+				DB $00							; R4, Clear
+				DB $00							; R5, Clear
+				DB $00							; R6, Clear
+				DB $FE							; R7, Tone Enable on Channel A, Noise Disable, Input Disable
+				DB $0F							; R8, Full Volume
+				DB $00							; R9, Clear
+				DB $00							; RA, Clear
+				DB $00							; RB, Clear
+				DB $00							; RC, Clear
+				DB $00							; RD, Clear
+				DB $00							; RE, Clear
+				DB $00							; RF, Clear
+;---

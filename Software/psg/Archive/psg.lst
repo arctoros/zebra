@@ -1,0 +1,423 @@
+                        ; --------------------------------------
+                        ; zasm: assemble "psg.asm"
+                        ; date: 2025-08-20 22:32:01
+                        ; --------------------------------------
+
+
+                        ;+-- Segments
+                        ;	$8000 - $8EFF Main Code
+                        ; $8F00 - $8FFF Interrupt Handlers
+                        ; $9000 - $90FF ASCII LUT
+                        ; $9100 - $91FF PSG Commands
+                        ;---
+                        
+                        ;+-- Symbols ---
+                        ;Only Port A is hooked up
+0000:                   SIO_DATA = %00000000					; Port A data register
+0002:                   SIO_CMD	= %00000010						; Port A command register
+                        
+0010:                   PIO_IN_DATA = %00010000 			; Port A data register
+0012:                   PIO_IN_CMD = %00010010 				; Port A command register
+0011:                   PIO_OUT_DATA = %00010001 			; Port B data register
+0013:                   PIO_OUT_CMD = %00010011 			; Port B command register
+                        
+0030:                   CTC_C0 = %00110000						; Channel 0
+0031:                   CTC_C1 = %00110001						; Channel 1
+0032:                   CTC_C2 = %00110010						; Channel 2
+0033:                   CTC_C3 = %00110011						; Channel 3
+                        
+0020:                   PSG_INACT = %00100000					; BDIR Low, BC1 Low
+0021:                   PSG_READ  = %00100001					; BDIR Low, BC1 High
+0022:                   PSG_WRITE = %00100010					; BDIR High, BC1 Low
+0023:                   PSG_ADDR  = %00100011					; BDIR High, BC1 High
+                        
+                        ; RAM
+5000:                   STACK = $5000
+5FFF:                   KEYBOARD_TIMER = $5FFF 
+6000:                   KEYBOARD_MAP = $6000					; Low order byte should be $00
+5FF0:                   PITCH_COUNTER = $5FF0
+                        ;---
+                        
+                        ;+-- Reset --- 
+8000:                           .org $8000
+                        
+8000:                   reset:
+                        				;+-- CPU Initialisation
+8000: 310050   [10]     				ld sp, STACK
+8003: 3E8F     [17]     				ld a, hi(intVectors)
+8005: ED47     [26]     				ld i, a
+8007: ED5E     [34]     				im 2
+8009: FB       [38]     				ei
+                        				;---
+                        
+                        				;+-- SIO Initialisation
+800A: 3E03     [45]     				ld a, %00000011       ; Select WR3
+800C: D302     [56]             out (SIO_CMD), a
+800E: 3EC1     [63]             ld a, %11000001
+                        				;      ││     └─────── Rx Enable
+                        				;      └┴───────────── 8 bits per character
+8010: D302     [74]             out (SIO_CMD), a
+                        
+8012: 3E04     [81]             ld a, %00000100       ; Select WR4
+8014: D302     [92]             out (SIO_CMD), a
+8016: 3E47     [99]             ld a, %01000111
+                        				;      │││││││└─────── Parity Enable
+                        				;      ││││││└──────── Parity Even
+                        				;      ││││└┴───────── 1 Stop Bit
+                        				;      ││└┴─────────── Sync Mode Disable
+                        				;      └┴───────────── X32 Clock Mode 
+8018: D302     [110]            out (SIO_CMD), a
+                        
+801A: 3E05     [117]    				ld a, %00000101       ; Select WR5
+801C: D302     [128]            out (SIO_CMD), a
+801E: 3E68     [135]            ld a, %01101000
+                        				;       ││ └────────── Tx Enable
+                        				;       └┴──────────── 8 bits per character 
+8020: D302     [146]            out (SIO_CMD), a 
+                        				;---
+                        
+                        				;+-- PIO Initialisation
+8022: 3E0F     [153]    				ld a, %00001111
+                        				;      ││││└┴┴┴─────── Identifies Mode Control Word 
+                        				;      ││└┴─────────── Don't care 
+                        				;      └┴───────────── Mode 0 (Output)
+8024: D313     [164]    				out (PIO_OUT_CMD), a	; Write to output port command register
+                        
+8026: 3E4F     [171]    				ld a, %01001111
+                        				;      ││││└┴┴┴─────── Identifies Mode Control Word 
+                        				;      ││└┴─────────── Don't care 
+                        				;      └┴───────────── Mode 1 (Input)
+8028: D312     [182]    				out (PIO_IN_CMD), a		; Write to input port command register
+                        				;---
+                        
+                        				;+-- CTC Initialisation
+802A: 3E00     [189]    				ld a, lo(CTCVec)
+802C: D330     [200]            out (CTC_C0), a
+                                
+802E: 3EA5     [207]    				ld a, %10100101
+                        				;      │││ │││└─────── Control Word
+                        				;      │││ ││└──────── Continued Operation
+                        				;      │││ │└───────── Time Constant Follows
+                        				;      │││ └────────── Automatic trigger
+                        				;      ││└──────────── Prescaler Value = 256 
+                        				;      │└───────────── Select Timer Mode
+                        				;      └────────────── Enable Interrupts 
+8030: D330     [218]            out (CTC_C0), a
+                        
+8032: 3E1F     [225]    				ld a, $1F							; Start Timer
+8034: D330     [236]    				out (CTC_C0), a
+                        				
+8036: 32FF5F   [249]    				ld (KEYBOARD_TIMER), a ; Init Keyboard Timer to $FF
+                        				;---
+                        
+                        				;+-- Reset Keyboad Map
+8039: 0608     [256]    				ld b, 8
+803B: 210060   [266]    				ld hl, KEYBOARD_MAP
+803E:                   resetKeyboardMap:
+803E: 3600     [10]     				ld (hl), 0
+8040: 23       [16]     				inc hl
+8041: 10FB     [24|29]  				djnz resetKeyboardMap
+                        				
+8043: 3E3E     [31]     				ld a, ">"
+8045: CD7C80   [48]     				call print
+                        				;--- 
+                        
+                        				;+-- PSG Initialisation
+8048: 0610     [55]     				ld b, 16
+804A: 210091   [65]     				ld hl, PSGCommands
+804D:                   PSGReset:
+804D: 55       [ 4]     				ld d, l
+804E: 5E       [11]     				ld e, (hl)
+804F: CDE280   [28]     				call PSGWrite
+8052: 2C       [32]     				inc l
+8053: 10F8     [40|45]  				djnz PSGReset
+                        
+8055: 011091   [50]     				ld bc, scale
+8058: ED43F05F [70]     				ld (PITCH_COUNTER), bc
+                        				;--- 
+                        ;---
+                        
+                        ;+-- Loop ---
+805C:                   loop:
+805C: 060C     [ 7]     				ld b, 12
+805E: 211091   [17]     				ld hl, scale
+8061:                   pass:
+8061: 3E01     [ 7]     				ld a, 1
+8063: D323     [18]     				out (PSG_ADDR), a
+8065: 7E       [25]     				ld a, (hl)
+8066: D322     [36]     				out (PSG_WRITE), a
+8068: 2C       [40]     				inc l
+                        
+8069: 3E00     [47]     				ld a, 0
+806B: D323     [58]     				out (PSG_ADDR), a
+806D: 7E       [65]     				ld a, (hl)
+806E: D322     [76]     				out (PSG_WRITE), a
+8070: 2C       [80]     				inc l
+                        
+8071: 3AFF5F   [13]     delay:  ld a, (KEYBOARD_TIMER)
+8074: C27180   [23|23]  				jp nz, delay
+                        				
+8077: 10E8     [31|36]  				djnz pass
+8079: C35C80   [41]     				jp loop
+                        ;---
+                        
+                        ;+-- Subroutines
+                        .local
+807C:                   print::
+807C: C5       [11]     				push bc
+807D: D300     [22]     				out (SIO_DATA), a			; Print A to SIO
+807F: 0628     [29]     				ld b, 40
+8081: 10FE     [ 8|13]  delay:	djnz delay						; 7 + 13 * 28 + 8 = 379 T
+8083: C1       [18]     				pop bc
+8084: C9       [28]     				ret
+                        .endlocal
+                        
+                        .local
+8085:                   strobe::
+8085: F5       [11]     				push af
+8086: D5       [22]     				push de
+8087: E5       [33]     				push hl
+8088: 1601     [40]     				ld d, %00000001				; Load the initial output coordinate
+808A: 210060   [50]     				ld hl, KEYBOARD_MAP		; Load the initial address of the keyboard map pointer
+808D:                   bitBang:
+808D: 7A       [ 4]     				ld a, d								; Load in the next bit
+808E: D311     [15]     				out (PIO_OUT_DATA), a ; Strobe the next bit
+8090: DB10     [26]     				in a, (PIO_IN_DATA)		; Read back the input coordinate
+8092: 77       [33]     				ld (hl), a						; Load the ready byte into ram at keyboard map pointer
+8093: 2C       [37]     				inc l									; Increment keyboard map pointer
+8094: CB22     [45]     				sla d									; Shit output coordinate left by 1
+8096: D28D80   [55|55]  				jp nc, bitBang 				; Break if carry is set (Bit has arrived)
+                        
+8099: E1       [65]     				pop hl
+809A: D1       [75]     				pop de
+809B: F1       [85]     				pop af
+809C: C9       [95]     				ret
+                        .endlocal
+                        
+                        .local
+809D:                   printCharacters::
+809D: F5       [11]     				push af
+809E: C5       [22]     				push bc
+809F: D5       [33]     				push de
+80A0: E5       [44]     				push hl
+                        
+80A1: 010000   [54]     				ld bc, 0							; B is data byte, C is bit index
+80A4: 110000   [64]     				ld de, 0							; D is shift bit, E is unused
+80A7: 210060   [74]     				ld hl, KEYBOARD_MAP		; hl is map pointer, l is byte index
+80AA: 46       [81]     				ld b, (hl)						; Load 0th byte of map
+80AB: 78       [85]     				ld a, b
+80AC: E640     [92]     				and %01000000					; Mask the shift bit
+80AE: 57       [96]     				ld d, a								; Store shift bit in D
+                        
+80AF:                   loop:
+80AF: CB40     [ 8]     				bit 0, b							; Test the 0th bit
+80B1: CACA80   [18|18]  				jp z, next						; Jump if clear
+                        															; If bit is set:
+80B4: C5       [29]     				push bc
+80B5: E5       [40]     				push hl				
+80B6: 7D       [44]     				ld a, l								; Load in the byte index
+80B7: CB27     [52]     				sla a									; Byte Index << 3
+80B9: CB27     [60]     				sla a
+80BB: CB27     [68]     				sla a
+80BD: 81       [72]     				add c									; Add bit index
+80BE: B2       [76]     				or d									; Set the shift bit accordingly
+                        				
+80BF: 2690     [83]     				ld h, hi(IndexToASCII); Load the ASCII LUT offset
+80C1: 6F       [87]     				ld l, a								; Load the index into low-order byte
+80C2: 7E       [94]     				ld a, (hl)						; Retrieve ASCII character with index
+80C3: FE00     [101]    				cp 0									; Set the condition flags
+80C5: C47C80   [111|118]				call nz, print				; Only print if not null
+                        		
+80C8: E1       [121]    				pop hl
+80C9: C1       [131]    				pop bc
+                        
+80CA:                   next:
+80CA: CB38     [ 8]     				srl b									; Shift byte right
+80CC: 3E08     [15]     				ld a, 8
+80CE: 0C       [19]     				inc c									; Increment bit index
+80CF: B9       [23]     				cp c									; Compare bit index to 8
+80D0: C2AF80   [33|33]  				jp nz, loop				; Repeat if C != 8
+                        
+80D3: 0E00     [40]     				ld c, 0								; If C = 8, reset C
+80D5: 3E08     [47]     				ld a, lo(KEYBOARD_MAP + 8)	; Load the last address of map
+80D7: 23       [53]     				inc hl								; Increment byte index
+80D8: 46       [60]     				ld b, (hl)						; Load in next byte of map
+80D9: BD       [64]     				cp l									; Compare byte index to last address
+80DA: C2AF80   [74|74]  				jp nz, loop				; Repeat if not arrived at last address
+                        				
+80DD: E1       [84]     				pop hl
+80DE: D1       [94]     				pop de
+80DF: C1       [104]    				pop bc
+80E0: F1       [114]    				pop af
+80E1: C9       [124]    				ret										; Else, return
+                        .endlocal
+                        
+80E2:                   PSGWrite::
+80E2: 7A       [ 4]     				ld a, d
+80E3: D323     [15]     				out (PSG_ADDR), a
+80E5: 7B       [19]     				ld a, e
+80E6: D322     [30]     				out (PSG_WRITE), a
+80E8: C9       [40]     				ret
+                        ;---
+                        
+                        ;+-- Interrupt Handlers
+                        				.org $8F00
+8F00:                   intVectors:
+8F00: 048F              CTCVec:	DB lo(CTCInt), hi(CTCInt)
+8F02: 1C8F              SIOVec:	DB lo(SIOInt), hi(CTCInt)
+                        
+8F04:                   CTCInt:				
+8F04: CD8580   [17]     				call strobe
+                        
+8F07: 3AFF5F   [30]     				ld a, (KEYBOARD_TIMER)
+8F0A: 3D       [34]     				dec a
+8F0B: 32FF5F   [47]     				ld (KEYBOARD_TIMER), a
+8F0E: CC9D80   [57|64]  				call z, printCharacters
+                        
+8F11: 3EA5     [64]     				ld a, %10100101
+8F13: D330     [75]             out (CTC_C0), a
+8F15: 3E1F     [82]     				ld a, $1F							; Start Timer
+8F17: D330     [93]     				out (CTC_C0), a
+                        
+8F19: FB       [97]     				ei
+8F1A: ED4D     [111]    				reti
+                        
+8F1C:                   SIOInt:
+8F1C: FB       [ 4]     				ei
+8F1D: ED4D     [18]     				reti
+                        ;---
+                        
+                        ;+-- Look-up Tables
+                        				.org $9000					; LSB should be $00
+9000:                   IndexToASCII:
+9000: 60380069              		DB 60h, 38h, 00h, 69h, 1Bh, 6Bh, 00h, 2Ch
+9004: 1B6B002C          
+9008: 3139716F             			DB 31h, 39h, 71h, 6Fh, 61h, 6Ch, 7Ah, 2Eh
+900C: 616C7A2E          
+9010: 32307770          				DB 32h, 30h, 77h, 70h, 73h, 3Bh, 78h, 2Fh
+9014: 733B782F          
+9018: 332D655B          				DB 33h, 2Dh, 65h, 5Bh, 64h, 27h, 63h, 00h
+901C: 64276300          
+9020: 343D725D          				DB 34h, 3Dh, 72h, 5Dh, 66h, 0Ah, 76h, 00h
+9024: 660A7600          
+9028: 3508745C          				DB 35h, 08h, 74h, 5Ch, 67h, 00h, 62h, 00h
+902C: 67006200          
+9030: 36007900          				DB 36h, 00h, 79h, 00h, 68h, 00h, 6Eh, 00h
+9034: 68006E00          
+9038: 37007500          				DB 37h, 00h, 75h, 00h, 6Ah, 20h, 6Dh, 00h
+903C: 6A206D00          
+                        
+9040: 7E2A0049          				DB 7Eh, 2Ah, 00h, 49h, 1Bh, 4Bh, 00h, 3Ch
+9044: 1B4B003C          
+9048: 2128514F          				DB 21h, 28h, 51h, 4Fh, 41h, 4Ch, 5Ah, 3Eh
+904C: 414C5A3E          
+9050: 40295750          				DB 40h, 29h, 57h, 50h, 53h, 3Ah, 58h, 3Fh
+9054: 533A583F          
+9058: 235F457B          				DB 23h, 5Fh, 45h, 7Bh, 44h, 22h, 43h, 00h
+905C: 44224300          
+9060: 242B527D          				DB 24h, 2Bh, 52h, 7Dh, 46h, 0Ah, 56h, 00h
+9064: 460A5600          
+9068: 2508547C          				DB 25h, 08h, 54h, 7Ch, 47h, 00h, 42h, 00h
+906C: 47004200          
+9070: 5E005900          				DB 5Eh, 00h, 59h, 00h, 48h, 00h, 4Eh, 00h
+9074: 48004E00          
+9078: 26005500          				DB 26h, 00h, 55h, 00h, 4Ah, 20h, 4Dh, 00h
+907C: 4A204D00          
+                        
+                        				.org $9100					; LSB should be $00
+9100:                   PSGCommands:
+9100: DE                				DB $DE							; R0, Port A fine adjustment = $DE
+9101: 01                				DB $01							; R1, Port A coarse adjustment = $01
+9102: 00                				DB $00							; R2, Clear
+9103: 00                				DB $00							; R3, Clear
+9104: 00                				DB $00							; R4, Clear
+9105: 00                				DB $00							; R5, Clear
+9106: 00                				DB $00							; R6, Clear
+9107: FE                				DB $FE							; R7, Tone Enable on Channel A, Noise Disable, Input Disable
+9108: 0F                				DB $0F							; R8, Full Volume
+9109: 00                				DB $00							; R9, Clear
+910A: 00                				DB $00							; RA, Clear
+910B: 00                				DB $00							; RB, Clear
+910C: 00                				DB $00							; RC, Clear
+910D: 00                				DB $00							; RD, Clear
+910E: 00                				DB $00							; RE, Clear
+910F: 00                				DB $00							; RF, Clear
+                        
+9110:                   scale:
+9110: 01B8              				DB $01B8						; C
+9112: 01A0              				DB $01A0						; C#
+9114: 0188              				DB $0188						; D
+9116: 0172              				DB $0172						; D#
+9118: 015D              				DB $015D						; E
+911A: 014A              				DB $014A						; F
+911C: 0137              				DB $0137						; F#
+911E: 0126              				DB $0126						; G
+9120: 0115              				DB $0115						; G#
+9122: 0106              				DB $0106						; A
+9124: 00F7              				DB $00F7						; A#
+9126: 00E9              				DB $00E9						; B
+9128: 00DC              				DB $00DC						; C'
+                        ;---
+
+
+; +++ segments +++
+
+#CODE          = $8000 = 32768,  size = $112A =  4394
+
+; +++ global symbols +++
+
+CTCInt           = $8F04 = 36612          psg.asm:263
+CTCVec           = $8F00 = 36608          psg.asm:260
+CTC_C0           = $0030 =    48          psg.asm:18
+CTC_C1           = $0031 =    49          psg.asm:19 (unused)
+CTC_C2           = $0032 =    50          psg.asm:20 (unused)
+CTC_C3           = $0033 =    51          psg.asm:21 (unused)
+IndexToASCII     = $9000 = 36864          psg.asm:286
+KEYBOARD_MAP     = $6000 = 24576          psg.asm:31
+KEYBOARD_TIMER   = $5FFF = 24575          psg.asm:30
+PIO_IN_CMD       = $0012 =    18          psg.asm:14
+PIO_IN_DATA      = $0010 =    16          psg.asm:13
+PIO_OUT_CMD      = $0013 =    19          psg.asm:16
+PIO_OUT_DATA     = $0011 =    17          psg.asm:15
+PITCH_COUNTER    = $5FF0 = 24560          psg.asm:32
+PSGCommands      = $9100 = 37120          psg.asm:306
+PSGReset         = $804D = 32845          psg.asm:122
+PSGWrite         = $80E2 = 32994          psg.asm:249
+PSG_ADDR         = $0023 =    35          psg.asm:26
+PSG_INACT        = $0020 =    32          psg.asm:23 (unused)
+PSG_READ         = $0021 =    33          psg.asm:24 (unused)
+PSG_WRITE        = $0022 =    34          psg.asm:25
+SIOInt           = $8F1C = 36636          psg.asm:279
+SIOVec           = $8F02 = 36610          psg.asm:261 (unused)
+SIO_CMD          = $0002 =     2          psg.asm:11
+SIO_DATA         = $0000 =     0          psg.asm:10
+STACK            = $5000 = 20480          psg.asm:29
+_end             = $912A = 37162          psg.asm:36 (unused)
+_size            = $112A =  4394          psg.asm:36 (unused)
+delay            = $8071 = 32881          psg.asm:151
+intVectors       = $8F00 = 36608          psg.asm:259
+loop             = $805C = 32860          psg.asm:135
+pass             = $8061 = 32865          psg.asm:138
+print            = $807C = 32892          psg.asm:160
+printCharacters  = $809D = 32925          psg.asm:192
+reset            = $8000 = 32768          psg.asm:38 (unused)
+resetKeyboardMap = $803E = 32830          psg.asm:110
+scale            = $9110 = 37136          psg.asm:324
+strobe           = $8085 = 32901          psg.asm:170
+
+; +++ local symbols +++
+
+delay   = $8081 = 32897          psg.asm:164
+
+; +++ local symbols +++
+
+bitBang = $808D = 32909          psg.asm:176
+
+; +++ local symbols +++
+
+loop    = $80AF = 32943          psg.asm:206
+next    = $80CA = 32970          psg.asm:228
+
+
+total time: 0.0021 sec.
+no errors

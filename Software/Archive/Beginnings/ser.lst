@@ -1,0 +1,42 @@
+                        ; --------------------------------------
+                        ; zasm: assemble "ser.asm"
+                        ; date: 2025-07-31 17:34:52
+                        ; --------------------------------------
+
+
+                        SIO = %00000010
+                        
+0000:                           .org $0000
+                        
+0000:                   on:
+0000: 3E05     [ 7]             ld a, %00000101       ; Select WR5
+0002: D302     [18]             out (SIO), a
+0004: 3E80     [25]             ld a, %10000000       ; Set DTR (bit 7)
+0006: D302     [36]             out (SIO), a
+                        
+0008:                   off:
+0008: 3E05     [ 7]             ld a, %00000101       ; Select WR5
+000A: D302     [18]             out (SIO), a
+000C: 3E00     [25]             ld a, %00000000       ; Clear DTR (bit 7)
+000E: D302     [36]             out (SIO), a
+0010: C30000   [46]             jp on
+                        
+0013: FFFFFFFF                  DS 32768 - $
+0017: FF...             
+
+
+; +++ segments +++
+
+#CODE          = $0000 =     0,  size = $8000 = 32768
+
+; +++ global symbols +++
+
+SIO     = $0002 =     2          ser.asm:1
+_end    = $8000 = 32768          ser.asm:3 (unused)
+_size   = $8000 = 32768          ser.asm:3 (unused)
+off     = $0008 =     8          ser.asm:11 (unused)
+on      = $0000 =     0          ser.asm:5
+
+
+total time: 0.0008 sec.
+no errors

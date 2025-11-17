@@ -1,0 +1,870 @@
+                        ; --------------------------------------
+                        ; zasm: assemble "vga.asm"
+                        ; date: 2025-11-07 17:44:37
+                        ; --------------------------------------
+
+
+                        ;+-- Symbols ---
+                        ;Only Port B is hooked up
+0001:                   SIO_DATA = %00000001					; Port B data register
+0003:                   SIO_CMD	= %00000011						; Port B command register
+                        
+0010:                   PIO_IN_DATA = %00010000 			; Port A data register
+0012:                   PIO_IN_CMD = %00010010 				; Port A command register
+0011:                   PIO_OUT_DATA = %00010001 			; Port B data register
+0013:                   PIO_OUT_CMD = %00010011 			; Port B command register
+                        
+0030:                   CTC_C0 = %00110000						; Channel 0
+0031:                   CTC_C1 = %00110001						; Channel 1
+0032:                   CTC_C2 = %00110010						; Channel 2
+0033:                   CTC_C3 = %00110011						; Channel 3
+                        
+0020:                   PSG_INACT = %00100000					; BDIR Low, BC1 Low
+0021:                   PSG_READ  = %00100001					; BDIR Low, BC1 High
+0022:                   PSG_WRITE = %00100010					; BDIR High, BC1 Low
+0023:                   PSG_ADDR  = %00100011					; BDIR High, BC1 High
+                        
+                        ; RAM
+5000:                   STACK = $5000
+5FFF:                   KEYBOARD_TIMER = $5FFF 
+6000:                   KEYBOARD_MAP = $6000					; Low order byte should be $00
+                        ;---
+                        
+                        ;+-- Reset --- 
+8000:                           .org $8000
+                        
+8000:                   reset:
+                        				;+-- CPU Initialisation
+8000: 310050   [10]     				ld sp, STACK
+8003: 3E8F     [17]     				ld a, hi(intVectors)
+8005: ED47     [26]     				ld i, a
+8007: ED5E     [34]     				im 2
+8009: FB       [38]     				ei
+                        				;---
+                        
+                        				;+-- SIO Initialisation
+800A: 3E03     [45]     				ld a, %00000011       ; Select WR3
+800C: D303     [56]             out (SIO_CMD), a
+800E: 3EC1     [63]             ld a, %11000001
+                        				;      ││     └─────── Rx Enable
+                        				;      └┴───────────── 8 bits per character
+8010: D303     [74]             out (SIO_CMD), a
+                        
+8012: 3E04     [81]             ld a, %00000100       ; Select WR4
+8014: D303     [92]             out (SIO_CMD), a
+8016: 3E47     [99]             ld a, %01000111
+                        				;      │││││││└─────── Parity Enable
+                        				;      ││││││└──────── Parity Even
+                        				;      ││││└┴───────── 1 Stop Bit
+                        				;      ││└┴─────────── Sync Mode Disable
+                        				;      └┴───────────── X32 Clock Mode 
+8018: D303     [110]            out (SIO_CMD), a
+                        
+801A: 3E05     [117]    				ld a, %00000101       ; Select WR5
+801C: D303     [128]            out (SIO_CMD), a
+801E: 3E68     [135]            ld a, %01101000
+                        				;       ││ └────────── Tx Enable
+                        				;       └┴──────────── 8 bits per character 
+8020: D303     [146]            out (SIO_CMD), a 
+                        				;---
+                        
+                        				;+-- PIO Initialisation
+8022: 3E0F     [153]    				ld a, %00001111
+                        				;      ││││└┴┴┴─────── Identifies Mode Control Word 
+                        				;      ││└┴─────────── Don't care 
+                        				;      └┴───────────── Mode 0 (Output)
+8024: D313     [164]    				out (PIO_OUT_CMD), a	; Write to output port command register
+                        
+8026: 3E4F     [171]    				ld a, %01001111
+                        				;      ││││└┴┴┴─────── Identifies Mode Control Word 
+                        				;      ││└┴─────────── Don't care 
+                        				;      └┴───────────── Mode 1 (Input)
+8028: D312     [182]    				out (PIO_IN_CMD), a		; Write to input port command register
+                        				;---
+                        
+                        				;+-- CTC Initialisation
+802A: 3E00     [189]    				ld a, lo(CTCVec)
+802C: D330     [200]            out (CTC_C0), a
+                                
+802E: 3EA5     [207]    				ld a, %10100101
+                        				;      │││ │││└─────── Control Word
+                        				;      │││ ││└──────── Continued Operation
+                        				;      │││ │└───────── Time Constant Follows
+                        				;      │││ └────────── Automatic trigger
+                        				;      ││└──────────── Prescaler Value = 256 
+                        				;      │└───────────── Select Timer Mode
+                        				;      └────────────── Enable Interrupts 
+8030: D330     [218]            out (CTC_C0), a
+                        
+8032: 3E1F     [225]    				ld a, $1F							; Start Timer
+8034: D330     [236]    				out (CTC_C0), a
+                        				
+8036: 32FF5F   [249]    				ld (KEYBOARD_TIMER), a ; Init Keyboard Timer to $FF
+                        				;---
+                        
+                        				;+-- Reset Keyboad Map
+8039: 0608     [256]    				ld b, 8
+803B: 210060   [266]    				ld hl, KEYBOARD_MAP
+803E:                   resetKeyboardMap:
+803E: 3600     [10]     				ld (hl), 0
+8040: 23       [16]     				inc hl
+8041: 10FB     [24|29]  				djnz resetKeyboardMap
+                        				
+8043: 3E3E     [31]     				ld a, ">"
+8045: CD5B80   [48]     				call print
+                        				;--- 
+                        ;---
+                        
+                        ;+-- Loop ---
+8048: F3       [52]     				di
+8049: 011082   [62]     				ld bc, image
+804C: 210080   [72]     				ld hl, $8000
+804F:                   wipe:
+804F: 0A       [ 7]     				ld a, (bc)
+8050: 77       [14]     				ld (hl), a
+8051: 03       [20]     				inc bc
+8052: 23       [26]     				inc hl
+8053: 7C       [30]     				ld a, h
+8054: B5       [34]     				or l
+8055: C24F80   [44|44]  				jp nz, wipe
+                        
+8058:                   loop:
+8058: C35880   [10]     				jp loop
+                        ;---
+                        
+                        ;+-- Subroutines
+                        .local
+805B:                   print::
+805B: C5       [11]     				push bc
+805C: D301     [22]     				out (SIO_DATA), a			; Print A to SIO
+805E: 0628     [29]     				ld b, 40
+8060: 10FE     [ 8|13]  delay:	djnz delay						; 7 + 13 * 28 + 8 = 379 T
+8062: C1       [18]     				pop bc
+8063: C9       [28]     				ret
+                        .endlocal
+                        
+                        .local
+8064:                   strobe::
+8064: F5       [11]     				push af
+8065: D5       [22]     				push de
+8066: E5       [33]     				push hl
+8067: 1601     [40]     				ld d, %00000001				; Load the initial output coordinate
+8069: 210060   [50]     				ld hl, KEYBOARD_MAP		; Load the initial address of the keyboard map pointer
+806C:                   bitBang:
+806C: 7A       [ 4]     				ld a, d								; Load in the next bit
+806D: D311     [15]     				out (PIO_OUT_DATA), a ; Strobe the next bit
+806F: DB10     [26]     				in a, (PIO_IN_DATA)		; Read back the input coordinate
+8071: 77       [33]     				ld (hl), a						; Load the ready byte into ram at keyboard map pointer
+8072: 2C       [37]     				inc l									; Increment keyboard map pointer
+8073: CB22     [45]     				sla d									; Shit output coordinate left by 1
+8075: D26C80   [55|55]  				jp nc, bitBang 				; Break if carry is set (Bit has arrived)
+                        
+8078: E1       [65]     				pop hl
+8079: D1       [75]     				pop de
+807A: F1       [85]     				pop af
+807B: C9       [95]     				ret
+                        .endlocal
+                        
+                        .local
+807C:                   printCharacters::
+807C: F5       [11]     				push af
+807D: C5       [22]     				push bc
+807E: D5       [33]     				push de
+807F: E5       [44]     				push hl
+                        
+8080: 010000   [54]     				ld bc, 0							; B is data byte, C is bit index
+8083: 110000   [64]     				ld de, 0							; D is shift bit, E is unused
+8086: 210060   [74]     				ld hl, KEYBOARD_MAP		; hl is map pointer, l is byte index
+8089: 46       [81]     				ld b, (hl)						; Load 0th byte of map
+808A: 78       [85]     				ld a, b
+808B: E640     [92]     				and %01000000					; Mask the shift bit
+808D: 57       [96]     				ld d, a								; Store shift bit in D
+                        
+808E:                   loop:
+808E: CB40     [ 8]     				bit 0, b							; Test the 0th bit
+8090: CAA980   [18|18]  				jp z, next						; Jump if clear
+                        															; If bit is set:
+8093: C5       [29]     				push bc
+8094: E5       [40]     				push hl				
+8095: 7D       [44]     				ld a, l								; Load in the byte index
+8096: CB27     [52]     				sla a									; Byte Index << 3
+8098: CB27     [60]     				sla a
+809A: CB27     [68]     				sla a
+809C: 81       [72]     				add c									; Add bit index
+809D: B2       [76]     				or d									; Set the shift bit accordingly
+                        				
+809E: 2681     [83]     				ld h, hi(IndexToASCII); Load the ASCII LUT offset
+80A0: 6F       [87]     				ld l, a								; Load the index into low-order byte
+80A1: 7E       [94]     				ld a, (hl)						; Retrieve ASCII character with index
+80A2: FE00     [101]    				cp 0									; Set the condition flags
+80A4: C45B80   [111|118]				call nz, print				; Only print if not null
+                        		
+80A7: E1       [121]    				pop hl
+80A8: C1       [131]    				pop bc
+                        
+80A9:                   next:
+80A9: CB38     [ 8]     				srl b									; Shift byte right
+80AB: 3E08     [15]     				ld a, 8
+80AD: 0C       [19]     				inc c									; Increment bit index
+80AE: B9       [23]     				cp c									; Compare bit index to 8
+80AF: C28E80   [33|33]  				jp nz, loop				; Repeat if C != 8
+                        
+80B2: 0E00     [40]     				ld c, 0								; If C = 8, reset C
+80B4: 3E08     [47]     				ld a, lo(KEYBOARD_MAP + 8)	; Load the last address of map
+80B6: 23       [53]     				inc hl								; Increment byte index
+80B7: 46       [60]     				ld b, (hl)						; Load in next byte of map
+80B8: BD       [64]     				cp l									; Compare byte index to last address
+80B9: C28E80   [74|74]  				jp nz, loop				; Repeat if not arrived at last address
+                        				
+80BC: E1       [84]     				pop hl
+80BD: D1       [94]     				pop de
+80BE: C1       [104]    				pop bc
+80BF: F1       [114]    				pop af
+80C0: C9       [124]    				ret										; Else, return
+                        .endlocal
+                        ;---
+                        
+                        ;+-- Interrupt Handlers
+                        				.org $8F00
+8F00:                   intVectors:
+8F00: 048F              CTCVec:	DB lo(CTCInt), hi(CTCInt)
+8F02: 1C8F              SIOVec:	DB lo(SIOInt), hi(CTCInt)
+                        
+8F04:                   CTCInt:				
+8F04: CD6480   [17]     				call strobe
+                        
+8F07: 3AFF5F   [30]     				ld a, (KEYBOARD_TIMER)
+8F0A: 3D       [34]     				dec a
+8F0B: 32FF5F   [47]     				ld (KEYBOARD_TIMER), a
+8F0E: CC7C80   [57|64]  				call z, printCharacters
+                        
+8F11: 3EA5     [64]     				ld a, %10100101
+8F13: D330     [75]             out (CTC_C0), a
+8F15: 3E1F     [82]     				ld a, $1F							; Start Timer
+8F17: D330     [93]     				out (CTC_C0), a
+                        
+8F19: FB       [97]     				ei
+8F1A: ED4D     [111]    				reti
+                        
+8F1C:                   SIOInt:
+8F1C: FB       [ 4]     				ei
+8F1D: ED4D     [18]     				reti
+                        ;---
+                        
+                        ;+-- Look-up Tables
+                        				.org $8100					; LSB should be $00
+8100:                   IndexToASCII:
+8100: 60380069              		DB 60h, 38h, 00h, 69h, 1Bh, 6Bh, 00h, 2Ch
+8104: 1B6B002C          
+8108: 3139716F             			DB 31h, 39h, 71h, 6Fh, 61h, 6Ch, 7Ah, 2Eh
+810C: 616C7A2E          
+8110: 32307770          				DB 32h, 30h, 77h, 70h, 73h, 3Bh, 78h, 2Fh
+8114: 733B782F          
+8118: 332D655B          				DB 33h, 2Dh, 65h, 5Bh, 64h, 27h, 63h, 00h
+811C: 64276300          
+8120: 343D725D          				DB 34h, 3Dh, 72h, 5Dh, 66h, 0Ah, 76h, 00h
+8124: 660A7600          
+8128: 3508745C          				DB 35h, 08h, 74h, 5Ch, 67h, 00h, 62h, 00h
+812C: 67006200          
+8130: 36007900          				DB 36h, 00h, 79h, 00h, 68h, 00h, 6Eh, 00h
+8134: 68006E00          
+8138: 37007500          				DB 37h, 00h, 75h, 00h, 6Ah, 20h, 6Dh, 00h
+813C: 6A206D00          
+                        
+8140: 7E2A0049          				DB 7Eh, 2Ah, 00h, 49h, 1Bh, 4Bh, 00h, 3Ch
+8144: 1B4B003C          
+8148: 2128514F          				DB 21h, 28h, 51h, 4Fh, 41h, 4Ch, 5Ah, 3Eh
+814C: 414C5A3E          
+8150: 40295750          				DB 40h, 29h, 57h, 50h, 53h, 3Ah, 58h, 3Fh
+8154: 533A583F          
+8158: 235F457B          				DB 23h, 5Fh, 45h, 7Bh, 44h, 22h, 43h, 00h
+815C: 44224300          
+8160: 242B527D          				DB 24h, 2Bh, 52h, 7Dh, 46h, 0Ah, 56h, 00h
+8164: 460A5600          
+8168: 2508547C          				DB 25h, 08h, 54h, 7Ch, 47h, 00h, 42h, 00h
+816C: 47004200          
+8170: 5E005900          				DB 5Eh, 00h, 59h, 00h, 48h, 00h, 4Eh, 00h
+8174: 48004E00          
+8178: 26005500          				DB 26h, 00h, 55h, 00h, 4Ah, 20h, 4Dh, 00h
+817C: 4A204D00          
+                        
+                        				.org $8200					; LSB should be $00
+8200:                   PSGCommands:
+8200: DE                				DB $DE							; R0, Port A fine adjustment = $DE
+8201: 01                				DB $01							; R1, Port A coarse adjustment = $01
+8202: 00                				DB $00							; R2, Clear
+8203: 00                				DB $00							; R3, Clear
+8204: 00                				DB $00							; R4, Clear
+8205: 00                				DB $00							; R5, Clear
+8206: 00                				DB $00							; R6, Clear
+8207: FE                				DB $FE							; R7, Tone Enable on Channel A, Noise Disable, Input Disable
+8208: 0F                				DB $0F							; R8, Full Volume
+8209: 00                				DB $00							; R9, Clear
+820A: 00                				DB $00							; RA, Clear
+820B: 00                				DB $00							; RB, Clear
+820C: 00                				DB $00							; RC, Clear
+820D: 00                				DB $00							; RD, Clear
+820E: 00                				DB $00							; RE, Clear
+820F: 00                				DB $00							; RF, Clear
+                        
+8210:                   image:
+8210: 11111111          				.incbin "out80x50.bin"
+8214: 11111111          
+8218: 11111C1C          
+821C: 1C1C1C1C          
+8220: 9C9C8B8B          
+8224: BBBBCCCC          
+8228: CC9CC9CC          
+822C: 1C9C9C19          
+8230: 99999966          
+8234: 96666667          
+8238: 11111111          
+823C: 11111111          
+8240: 11C1C1C1          
+8244: C1C111C1          
+8248: C9CCC8C8          
+824C: B8B8BCC9          
+8250: CC1C1C1C          
+8254: C1C1C1CC          
+8258: 19919994          
+825C: 69476666          
+8260: 10111111          
+8264: 11111111          
+8268: 1111111C          
+826C: 1C1C1C1C          
+8270: 9C9C8BBB          
+8274: BCBBCCCC          
+8278: 9CC1C1C1          
+827C: CC1C1C19          
+8280: C9999499          
+8284: 46696666          
+8288: 01111111          
+828C: 11111111          
+8290: 1111C1C1          
+8294: C1C1C1C1          
+8298: C9C9C8C8          
+829C: B8B8B9C9          
+82A0: CC9CCCCC          
+82A4: C1C1CC9C          
+82A8: 91999999          
+82AC: 96946646          
+82B0: 11101111          
+82B4: 11111111          
+82B8: C1C1C1C1          
+82BC: C1C1C1CC          
+82C0: C9C9C8BB          
+82C4: 8BBBCC9B          
+82C8: 99C99999          
+82CC: C9CC9191          
+82D0: 99969696          
+82D4: 94696466          
+82D8: 11111111          
+82DC: 11111111          
+82E0: 1111C1C9          
+82E4: 9C9C1C19          
+82E8: C9999B8B          
+82EC: B8B8BBB9          
+82F0: C9C9CCC9          
+82F4: 9C999C99          
+82F8: 96969679          
+82FC: 99669666          
+8300: 11111111          
+8304: 11111C11          
+8308: C11C1C91          
+830C: 9999C9C9          
+8310: 9C9C98B8          
+8314: BB8BB9CB          
+8318: BC9C999C          
+831C: 99999999          
+8320: 99697777          
+8324: 76867697          
+8328: 11111111          
+832C: 11111111          
+8330: 11C1999C          
+8334: 99999999          
+8338: 999999B8          
+833C: B8BB8BBB          
+8340: 9BB9C8C8          
+8344: 88C99996          
+8348: 96997798          
+834C: 68979666          
+8350: 11111121          
+8354: 11111C1C          
+8358: 1C1C9999          
+835C: 99999999          
+8360: 99798B88          
+8364: 85BBB988          
+8368: BB8B8B8B          
+836C: 8B899997          
+8370: 77777779          
+8374: 96767677          
+8378: 11111111          
+837C: 11111111          
+8380: 91919999          
+8384: 99999677          
+8388: 7777977B          
+838C: 89D3DAAB          
+8390: B8BB8B8B          
+8394: 88B88979          
+8398: 77997987          
+839C: 86867667          
+83A0: 11111118          
+83A4: 19119199          
+83A8: 19999999          
+83AC: 77779797          
+83B0: 97777879          
+83B4: 75E33DBA          
+83B8: AB8BB8B8          
+83BC: 8B899799          
+83C0: 99779799          
+83C4: 99486666          
+83C8: 14414484          
+83CC: 14119191          
+83D0: 99669677          
+83D4: 79797677          
+83D8: 77777775          
+83DC: AAA333CC          
+83E0: CAB8B8B8          
+83E4: B9898799          
+83E8: 97999898          
+83EC: 99964646          
+83F0: 44444444          
+83F4: 48444666          
+83F8: 66696966          
+83FC: 76776777          
+8400: 777768AA          
+8404: A555338C          
+8408: CCBECC88          
+840C: 88B89999          
+8410: 99999999          
+8414: 94848494          
+8418: 44444444          
+841C: 44464466          
+8420: 46666766          
+8424: 67677667          
+8428: 77766AA5          
+842C: 555533CC          
+8430: 1CCEFDCC          
+8434: 8B898999          
+8438: 99999989          
+843C: 89199494          
+8440: 44444449          
+8444: 44444646          
+8448: 66666666          
+844C: 66676666          
+8450: 67665A55          
+8454: 777533CC          
+8458: 11CBFFD8          
+845C: 98989899          
+8460: 99999999          
+8464: 19819994          
+8468: 44444444          
+846C: 44646466          
+8470: 66666674          
+8474: 74767667          
+8478: 7665D555          
+847C: 577533CC          
+8480: CCCDBBDD          
+8484: 99899999          
+8488: 99919919          
+848C: 99199946          
+8490: 44444444          
+8494: 44444464          
+8498: 64666647          
+849C: 47676667          
+84A0: 465D5555          
+84A4: 5553331C          
+84A8: CCBDCCBB          
+84AC: 99989999          
+84B0: 99199199          
+84B4: 19899966          
+84B8: 44144444          
+84BC: 44444446          
+84C0: 46466666          
+84C4: 64646664          
+84C8: 75D55555          
+84CC: 5533330C          
+84D0: CCC16999          
+84D4: 99998999          
+84D8: 99919999          
+84DC: 89988977          
+84E0: 14141444          
+84E4: 44444444          
+84E8: 64644664          
+84EC: 66666647          
+84F0: D5555555          
+84F4: 55533320          
+84F8: CC177999          
+84FC: 98989999          
+8500: 99991999          
+8504: 98999797          
+8508: 41141444          
+850C: 44444444          
+8510: 44446646          
+8514: 6446447D          
+8518: 55575555          
+851C: 55553222          
+8520: 20679968          
+8524: 99999819          
+8528: 91919989          
+852C: 89989877          
+8530: 11411114          
+8534: 14114144          
+8538: 44464464          
+853C: 466447D5          
+8540: 55575555          
+8544: 55353D22          
+8548: D2669686          
+854C: 98989999          
+8550: 98698688          
+8554: 98877777          
+8558: 11114141          
+855C: 41411444          
+8560: 44446464          
+8564: 644475A5          
+8568: 57777755          
+856C: 55535351          
+8570: 2D266648          
+8574: 68888888          
+8578: 68668968          
+857C: 77887877          
+8580: 41411414          
+8584: 14141114          
+8588: 44644644          
+858C: 44465557          
+8590: 77777555          
+8594: 53555D30          
+8598: 22D64884          
+859C: 88898868          
+85A0: 88884886          
+85A4: 88778786          
+85A8: 11111141          
+85AC: 41411141          
+85B0: 44444646          
+85B4: 4445A575          
+85B8: 55755575          
+85BC: 88555EE8          
+85C0: 22224448          
+85C4: 84888888          
+85C8: 78748784          
+85CC: 84448487          
+85D0: 11111114          
+85D4: 14111414          
+85D8: 14464644          
+85DC: 445A5555          
+85E0: 77577858          
+85E4: 545EEEED          
+85E8: B2229484          
+85EC: 48488868          
+85F0: 86884848          
+85F4: 48488877          
+85F8: 11111111          
+85FC: 11111114          
+8600: 41446466          
+8604: 46E35555          
+8608: 57758485          
+860C: 3EEEEEDA          
+8610: B2288448          
+8614: 44848848          
+8618: 48484848          
+861C: 44847857          
+8620: 11411141          
+8624: 41111411          
+8628: 94944644          
+862C: 65D35355          
+8630: 55848545          
+8634: EEEEAAFA          
+8638: A2228444          
+863C: 48484884          
+8640: 88848484          
+8644: 84888775          
+8648: 11111111          
+864C: 11411116          
+8650: 11419844          
+8654: 3E355555          
+8658: 8448855A          
+865C: EEEAAAEA          
+8660: AC284181          
+8664: 24484848          
+8668: 48484848          
+866C: 48875555          
+8670: 11111141          
+8674: 41111411          
+8678: 91944418          
+867C: E3555578          
+8680: 8887875E          
+8684: AAAAAAAA          
+8688: AB291414          
+868C: 44244848          
+8690: 88848488          
+8694: 88777575          
+8698: 11111111          
+869C: 14111111          
+86A0: 14119183          
+86A4: 35577878          
+86A8: 884445EA          
+86AC: EAAAAAAA          
+86B0: AA041441          
+86B4: 41448484          
+86B8: 48888888          
+86BC: 75757555          
+86C0: 11111111          
+86C4: 41411114          
+86C8: 1141193E          
+86CC: 57785886          
+86D0: 84417AEE          
+86D4: AAAAAAAA          
+86D8: AA144184          
+86DC: 11411844          
+86E0: 84487755          
+86E4: 57575757          
+86E8: 11111114          
+86EC: 11111111          
+86F0: 141113D7          
+86F4: 77889899          
+86F8: 1117AEAA          
+86FC: AAAAAAAA          
+8700: AB111411          
+8704: 14114484          
+8708: 88575557          
+870C: 777555A7          
+8710: 11111111          
+8714: 14141414          
+8718: 11118556          
+871C: 78664110          
+8720: 16AAAAAA          
+8724: AAAAAAAA          
+8728: A7441141          
+872C: 41444848          
+8730: 77557775          
+8734: 7557A777          
+8738: 11111111          
+873C: 41411111          
+8740: 41858791          
+8744: 11111118          
+8748: 5AAAAAAA          
+874C: AAAAAAAA          
+8750: A1444111          
+8754: 11448877          
+8758: 77757777          
+875C: 57776777          
+8760: 11111111          
+8764: 11114141          
+8768: 11881112          
+876C: 23333335          
+8770: AAAAAAAA          
+8774: AAAAAAAA          
+8778: 41441441          
+877C: 41447778          
+8780: 75777777          
+8784: 66777766          
+8788: 11111111          
+878C: 11141111          
+8790: 41110023          
+8794: 33333333          
+8798: EAAAAAAA          
+879C: AAAAAAA7          
+87A0: 44444111          
+87A4: 14487785          
+87A8: 77777664          
+87AC: 66666664          
+87B0: 11101010          
+87B4: 41111411          
+87B8: 14410233          
+87BC: 3333333E          
+87C0: EAAAAAAA          
+87C4: AAAAAAB1          
+87C8: 44441114          
+87CC: 48877777          
+87D0: 76644644          
+87D4: 64464644          
+87D8: 01110111          
+87DC: 01110414          
+87E0: 11112333          
+87E4: 2322223E          
+87E8: EEAAAAAA          
+87EC: AAAABB44          
+87F0: 44414444          
+87F4: 84777777          
+87F8: 64444444          
+87FC: 44444444          
+8800: 40104001          
+8804: 04014111          
+8808: 14123222          
+880C: 212855DD          
+8810: DDAAAAAB          
+8814: AABA6441          
+8818: 41444468          
+881C: 68778784          
+8820: 41444444          
+8824: 44444444          
+8828: 10101040          
+882C: 11011011          
+8830: 41232222          
+8834: 21888B55          
+8838: 5A57BBBB          
+883C: BBB94444          
+8840: 44444487          
+8844: 78686414          
+8848: 41411114          
+884C: 14444444          
+8850: 01010101          
+8854: 00401140          
+8858: 44222221          
+885C: 1888888B          
+8860: 5899CB67          
+8864: A6644444          
+8868: 14144648          
+886C: 87444414          
+8870: 14144444          
+8874: 44141414          
+8878: 00400010          
+887C: 40040044          
+8880: 41232221          
+8884: 4C988888          
+8888: 8891CBB6          
+888C: 44444444          
+8890: 41414484          
+8894: 44441141          
+8898: 41411114          
+889C: 11414144          
+88A0: 01001101          
+88A4: 01100404          
+88A8: 10234244          
+88AC: 6C444988          
+88B0: 911149B5          
+88B4: 11444411          
+88B8: 41111144          
+88BC: 41111414          
+88C0: 14141411          
+88C4: 14111111          
+88C8: 10040001          
+88CC: 01001041          
+88D0: 00174447          
+88D4: 7C644644          
+88D8: 446444DD          
+88DC: D4111111          
+88E0: 01010101          
+88E4: 01011011          
+88E8: 10101111          
+88EC: 11110100          
+88F0: 00100100          
+88F4: 10000410          
+88F8: 0014447B          
+88FC: CC144444          
+8900: 444404BB          
+8904: DD111114          
+8908: 44444888          
+890C: 88DDDEEE          
+8910: EEEEEEEE          
+8914: EEEDEDDD          
+8918: 00000000          
+891C: 01114001          
+8920: 188685DB          
+8924: C8911198          
+8928: 885D88DD          
+892C: DEEDEEEE          
+8930: FEEFFFFF          
+8934: FFFFFFFF          
+8938: FFFFFFFF          
+893C: FFFFFFFF          
+8940: 88855DDD          
+8944: DEEFD1DF          
+8948: EFEEEEEE          
+894C: DDD888DD          
+8950: DEDEEEDE          
+8954: DEFFFFFF          
+8958: FFFFFFFF          
+895C: FEFFFFFF          
+8960: EFFFEEEE          
+8964: EEEEEFFF          
+8968: FEFFFFFF          
+896C: FFEE2DFF          
+8970: EEEEEDDD          
+8974: D288DD5D          
+8978: EDEEEEEE          
+897C: EEEEEEFF          
+8980: FEFFEEEE          
+8984: EEEFEEFE          
+8988: FFFFEEEF          
+898C: EEEEEEEE          
+8990: EEEEEEEE          
+8994: EEE3EFEE          
+8998: EEEDD2D2          
+899C: 888D8DDD          
+89A0: DDDEDEEE          
+89A4: EEEEFEEE          
+89A8: EEEEEEEE          
+89AC: EEEEEEEE          
+89B0: DDDEEEEE          
+89B4: EEEEEEEE          
+89B8: DDDDDDDD          
+89BC: ED2DDDDD          
+89C0: DDDD8888          
+89C4: 88C888DD          
+89C8: 5DDDDDDD          
+89CC: DDEDDDDD          
+89D0: DDEDEDED          
+89D4: DDDDDDDD          
+89D8: BDBB8BBD          
+89DC: DDDDD8DD          
+                        ;---
+
+
+; +++ segments +++
+
+#CODE          = $8000 = 32768,  size = $0F1F =  3871
+
+; +++ global symbols +++
+
+CTCInt           = $8F04 = 36612          vga.asm:227
+CTCVec           = $8F00 = 36608          vga.asm:224
+CTC_C0           = $0030 =    48          vga.asm:11
+CTC_C1           = $0031 =    49          vga.asm:12 (unused)
+CTC_C2           = $0032 =    50          vga.asm:13 (unused)
+CTC_C3           = $0033 =    51          vga.asm:14 (unused)
+IndexToASCII     = $8100 = 33024          vga.asm:250
+KEYBOARD_MAP     = $6000 = 24576          vga.asm:24
+KEYBOARD_TIMER   = $5FFF = 24575          vga.asm:23
+PIO_IN_CMD       = $0012 =    18          vga.asm:7
+PIO_IN_DATA      = $0010 =    16          vga.asm:6
+PIO_OUT_CMD      = $0013 =    19          vga.asm:9
+PIO_OUT_DATA     = $0011 =    17          vga.asm:8
+PSGCommands      = $8200 = 33280          vga.asm:270 (unused)
+PSG_ADDR         = $0023 =    35          vga.asm:19 (unused)
+PSG_INACT        = $0020 =    32          vga.asm:16 (unused)
+PSG_READ         = $0021 =    33          vga.asm:17 (unused)
+PSG_WRITE        = $0022 =    34          vga.asm:18 (unused)
+SIOInt           = $8F1C = 36636          vga.asm:243
+SIOVec           = $8F02 = 36610          vga.asm:225 (unused)
+SIO_CMD          = $0003 =     3          vga.asm:4
+SIO_DATA         = $0001 =     1          vga.asm:3
+STACK            = $5000 = 20480          vga.asm:22
+_end             = $8F1F = 36639          vga.asm:28 (unused)
+_size            = $0F1F =  3871          vga.asm:28 (unused)
+image            = $8210 = 33296          vga.asm:288
+intVectors       = $8F00 = 36608          vga.asm:223
+loop             = $8058 = 32856          vga.asm:125
+print            = $805B = 32859          vga.asm:131
+printCharacters  = $807C = 32892          vga.asm:163
+reset            = $8000 = 32768          vga.asm:30 (unused)
+resetKeyboardMap = $803E = 32830          vga.asm:102
+strobe           = $8064 = 32868          vga.asm:141
+wipe             = $804F = 32847          vga.asm:116
+
+; +++ local symbols +++
+
+delay   = $8060 = 32864          vga.asm:135
+
+; +++ local symbols +++
+
+bitBang = $806C = 32876          vga.asm:147
+
+; +++ local symbols +++
+
+loop    = $808E = 32910          vga.asm:177
+next    = $80A9 = 32937          vga.asm:199
+
+
+total time: 0.0044 sec.
+no errors

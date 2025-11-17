@@ -1,0 +1,84 @@
+                        ; --------------------------------------
+                        ; zasm: assemble "working.asm"
+                        ; date: 2025-08-08 11:12:17
+                        ; --------------------------------------
+
+
+                        ;+-- Symbols ---
+                        ; Only Port A is hooked up
+                        DATA = %00000000
+                        CMD	= %00000010
+                        ;---
+                        
+                        ;+-- Reset --- 
+0000:                           .org $0000
+                        
+0000:                   reset:
+0000: 3E03     [ 7]     				ld a, %00000011       ; Select WR3
+0002: D302     [18]             out (CMD), a
+0004: 3EC1     [25]             ld a, %11000001
+                        				;      ││     └─────── Rx Enable
+                        				;      └┴───────────── 8 bits per character
+0006: D302     [36]             out (CMD), a
+                        
+0008: 3E04     [43]             ld a, %00000100       ; Select WR4
+000A: D302     [54]             out (CMD), a
+000C: 3E87     [61]             ld a, %10000111
+                        				;      │││││││└─────── Parity Enable
+                        				;      ││││││└──────── Parity Even
+                        				;      ││││└┴───────── 1 Stop Bit
+                        				;      ││└┴─────────── Sync Mode Disable
+                        				;      └┴───────────── X32 Clock Mode 
+000E: D302     [72]             out (CMD), a
+                        
+0010: 3E05     [79]     				ld a, %00000101       ; Select WR5
+0012: D302     [90]             out (CMD), a
+0014: 3E68     [97]             ld a, %01101000
+                        				;       ││ └────────── Tx Enable
+                        				;       └┴──────────── 8 bits per character 
+0016: D302     [108]            out (CMD), a 
+                        
+0018:                   loop:
+                        				;ld a, $61
+                        				;out (DATA), a
+                        				
+                        				;ld bc, #0
+0018:                   1$:
+0018: CB47     [ 8]       		  bit #0,a    ; 8
+001A: CB47     [16]         		bit #0,a    ; 8
+001C: CB47     [24]        		 	bit #0,a    ; 8
+001E: E6FF     [31]        		 	and a,#255  ; 7
+0020: 0B       [37]        		 	dec bc      ; 6
+0021: 79       [41]        		 	ld a,c     ; 4
+0022: B0       [45]         		or b     ; 4
+0023: C20000   [55|55]     		 	jp nz, reset   ; 10, total = 55 states/iteration
+                        				
+0026: 3E61     [62]     				ld a, $61
+0028: D300     [73]     				out (DATA), a
+002A: C30000   [83]     				jp reset 
+                        
+                        ;---
+                        
+                        ;+-- Subroutines 
+                        
+                        ;---
+002D: FFFFFFFF                  DS 32768 - $
+0031: FF...             
+
+
+; +++ segments +++
+
+#CODE          = $0000 =     0,  size = $8000 = 32768
+
+; +++ global symbols +++
+
+CMD     = $0002 =     2          working.asm:4
+DATA    = $0000 =     0          working.asm:3
+_end    = $8000 = 32768          working.asm:8 (unused)
+_size   = $8000 = 32768          working.asm:8 (unused)
+loop    = $0018 =    24          working.asm:35 (unused)
+reset   = $0000 =     0          working.asm:10
+
+
+total time: 0.0010 sec.
+no errors
